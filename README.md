@@ -137,11 +137,46 @@ and brakes for obstacles. Neither uses scripted motion.
 
 ### Presentation
 
-Chase/hood/bumper/cockpit/drone cameras (`src/render/cameraRig.ts`), procedural
-car meshes, sky + IBL, dynamic resolution, SMAA/bloom, colour-blind grading
-modes, particles and skid marks driven by measured tyre slip, and a Web Audio
-synthesiser (engine, tyre, wind, impacts, radio stations) that suspends when the
-tab is hidden and falls back silently if audio is blocked.
+Chase/hood/bumper/cockpit/drone cameras (`src/render/cameraRig.ts`), sky + IBL,
+dynamic resolution, SMAA/bloom, colour-blind grading modes, particles and skid
+marks driven by measured tyre slip, and a Web Audio synthesiser (engine, tyre,
+wind, impacts, radio stations) that suspends when the tab is hidden and falls
+back silently if audio is blocked.
+
+Nothing is loaded from disk or the network: every texture and mesh is authored
+at boot.
+
+- **Texture library** (`src/render/textures.ts`) — procedural, *tileable* PBR
+  sets: albedo, tangent-space normal and roughness are generated from one shared
+  height field per surface, so the lighting agrees with the visible detail.
+  Asphalt (aggregate, tar patches, hairline cracks, polished wheel tracks),
+  gravel, dirt, grass, rock, sand, concrete, foliage and cloud noise.
+- **Material library** (`src/render/materials.ts`) — height-based exponential fog
+  (valleys haze, peaks stay crisp), wetness that darkens albedo and drops
+  roughness on flat ground, animated water ripples, and a tri-biome ground-detail
+  pass that blends grass/sand/rock detail albedo *and* detail normals from
+  bake-time biome weights plus slope, at two rotated scales to hide tiling.
+- **Car modelling** (`src/render/carMesh.ts`) — bodies are lofted from rounded
+  rectangular cross-sections per body style (supercar, coupe, muscle, hatch,
+  sedan, SUV, truck, van, buggy) with caps, arch liners and arch lips, separate
+  glass, pillars, bumpers, grille, splitter, diffuser, mirrors, spoilers and
+  exhausts; wheels are full assemblies (tyre torus, tread blocks, barrel, face,
+  ten spokes, hub, brake disc, caliper); interiors get dash, tunnel, seats and
+  wheel; head/tail lights are emissive with real headlight spotlights.
+- **Lighting** (`src/render/scene.ts`) — Preetham sky modelled for IBL, two
+  shadow cascades (a tight 84 m box that follows the car for contact shadows and
+  a wide 340 m cascade for the landscape), a procedural cloud dome with
+  sun-forward scattering, a ground-truth ambient occlusion pass at medium and
+  above, and a filmic grade with split toning, grain and vignette.
+- **World dressing** — the horizon is closed by a coarse distant-landscape mesh
+  plus procedural ridge systems beyond the playable square, roads carry painted
+  lane markings that follow crests and camber, and props are multi-part
+  instanced geometry (layered conifer canopies, branched broadleaves, curved palm
+  trunks, displaced rock, buildings with window bands and eaves).
+
+Quality presets gate the cost: `low` drops the AO pass, the far shadow cascade
+and ground detail entirely; `ultra` raises shadow resolution, anisotropy, terrain
+resolution and AO sampling.
 
 ### Accessibility
 
@@ -270,10 +305,17 @@ the README says so rather than pretending otherwise.
 
 ## Known limitations
 
-* **Visual finish is simple.** Geometry is low-poly and generated in code: blocky
-  buildings, billboard-ish foliage, flat-shaded terrain colours driven by biome
-  and slope. There is no normal-mapped material set, no baked GI, no SSAO and no
-  shadows above the "low" preset quality on weak GPUs running SwiftShader.
+* **Visual finish is stylised, not photoreal.** Everything is authored in code at
+  boot, so there are no authored assets, no baked global illumination, no
+  reflection probes, and no cloth/hair/vegetation simulation. Ground and props
+  are normal-mapped and AO'd, cars are lofted procedural bodies, and the sky,
+  clouds and shadows are real-time only. Populated foliage thins out with
+  distance and the LOD swap is visible if you stop and stare at a treeline.
+* **Rendering cost is real.** Measured on the headless reference run: ~1.2 k draw
+  calls and 830 k triangles per frame at the default preset, rising to ~3.6 k
+  calls once both shadow cascades are counted. Low-end machines should use the
+  `low` preset (no AO pass, no far cascade, no ground detail) or the dynamic
+  resolution scaler.
 * **No damage deformation.** Damage is a set of physical parameters (engine,
   steering, per-wheel grip); panels do not crumple and nothing breaks apart.
 * **Traffic is sparse and simple** (10 cars, lane follower, no overtaking logic).

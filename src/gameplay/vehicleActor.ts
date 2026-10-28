@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { VehicleSim } from '../physics/vehicle';
 import { CarMesh, type CarAppearance } from '../render/carMesh';
+import type { SharedUniforms } from '../render/materials';
 import type { VehicleSpec } from '../vehicles/spec';
 import type { CarControl, SurfaceSample } from '../core/types';
 import { DEFAULT_ENVIRONMENT, type SimEnvironment } from '../physics/vehicle';
@@ -14,6 +15,8 @@ export interface ActorOptions {
   assists: ConstructorParameters<typeof VehicleSim>[2]['assists'];
   simDamage: boolean;
   surfaceSampler: (x: number, y: number, z: number, normalY: number) => SurfaceSample;
+  /** Shared shading uniforms (wetness/time) so cars respond to weather too. */
+  shared: SharedUniforms;
 }
 
 /** A car in the world: physics simulation + visual mesh + interpolation state. */
@@ -45,7 +48,7 @@ export class VehicleActor {
       surfaceSampler: opts.surfaceSampler,
       isPlayer: opts.isPlayer,
     });
-    this.mesh = new CarMesh(opts.spec, opts.appearance);
+    this.mesh = new CarMesh(opts.spec, opts.appearance, opts.shared);
     this.name = opts.name;
     this.isPlayer = opts.isPlayer;
     this.captureState();

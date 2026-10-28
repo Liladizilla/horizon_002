@@ -120,12 +120,12 @@ export function biomeColor(x: number, z: number, height: number, slope: number):
   // (~0.04 for dark grass up to ~0.7 for fresh snow). Authoring them brighter
   // makes the world look washed out once sun, sky and IBL are summed at
   // physically plausible light levels.
-  const rock: [number, number, number] = [0.13, 0.12, 0.11];
+  const rock: [number, number, number] = [0.115, 0.108, 0.1];
   const sand: [number, number, number] = [0.34, 0.29, 0.19];
   const dirt: [number, number, number] = [0.15, 0.11, 0.07];
-  const grass: [number, number, number] = [0.075, 0.14, 0.045];
-  const jungleGrass: [number, number, number] = [0.045, 0.10, 0.035];
-  const farm: [number, number, number] = [0.16, 0.19, 0.07];
+  const grass: [number, number, number] = [0.085, 0.125, 0.055];
+  const jungleGrass: [number, number, number] = [0.055, 0.095, 0.042];
+  const farm: [number, number, number] = [0.15, 0.165, 0.075];
   const snow: [number, number, number] = [0.62, 0.66, 0.72];
   const ash: [number, number, number] = [0.06, 0.055, 0.05];
   const townGround: [number, number, number] = [0.14, 0.14, 0.15];
@@ -151,6 +151,33 @@ export function biomeColor(x: number, z: number, height: number, slope: number):
 function mix(a: [number, number, number], b: [number, number, number], t: number): [number, number, number] {
   const k = clamp(t, 0, 1);
   return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
+}
+
+/**
+ * Distant ranges beyond the playable map.
+ *
+ * The playable square is bounded by the coastline on one side and open plains on
+ * the others, which leaves an empty horizon in most directions. This adds three
+ * layered ridge systems outside the map so there is always a landscape to look
+ * at — visual only (nothing out there is collidable) but driven by the same
+ * noise family as the terrain inside.
+ *
+ * Returns metres of *added* elevation: 0 inside the map, ramping up outside.
+ */
+export function distantRidge(x: number, z: number): number {
+  const half = WORLD_SIZE / 2;
+  const outside = Math.max(Math.abs(x) - (half - 250), Math.abs(z) - (half - 250), 0);
+  if (outside <= 0) return 0;
+  // Ramp in over ~900 m so the join with the map is seamless.
+  const ramp = clamp(outside / 900, 0, 1);
+  // Three ranges at different scales, each gated by its own band so they read
+  // as separate ridgelines rather than one noisy wall.
+  const r1 = ridged2(x * 0.00042, z * 0.00042, 5, 401);
+  const r2 = ridged2(x * 0.00095, z * 0.00095, 4, 733);
+  const band = 0.55 + 0.45 * Math.sin((x + z) * 0.00035);
+  const range = Math.pow(clamp(r1 * 1.15 - 0.28, 0, 1), 1.6) * 520 * band
+    + Math.pow(clamp(r2 - 0.42, 0, 1), 1.8) * 180;
+  return range * ramp;
 }
 
 export function inPlayableArea(x: number, z: number): boolean {

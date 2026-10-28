@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { ColliderDesc, RigidBodyDesc, type World as RapierWorld, type RigidBody } from '@dimforge/rapier3d-compat';
 import { clamp, lerp, smoothstep } from '../core/math';
 import type { SurfaceId } from '../core/types';
-import { baseHeight, biomeWeights, biomeColor, WORLD_SIZE, SEA_LEVEL } from './terrain';
+import { baseHeight, biomeWeights, biomeColor, distantRidge, WORLD_SIZE, SEA_LEVEL } from './terrain';
 import { buildRoadNetwork, RoadGraph, type RoadField, type RoadInstance } from './roads';
 import { generateChunkProps, CHUNK_SIZE, type PropInstance, type PropType } from './props';
 import { buildPropGeometries, propMaterial, BUILDING_TINTS } from '../render/worldMeshes';
@@ -15,11 +15,15 @@ const HALF_WORLD = WORLD_SIZE / 2;
 
 const PHYS_RES = 4;             // Rapier heightfield cell size
 const PHYS_SUBDIV = CHUNK_SIZE / PHYS_RES; // 128
-const VIS_NEAR_RES = 8;
-const VIS_FAR_RES = 16;
 
 const VIEW_RADIUS = 1150;       // chunks with visuals
 const ROAD_LIFT = 0.09;         // road mesh sits this far above the height field
+// UV scale for road ribbons. The asphalt texture is square and covers ~3.5 m
+// of road, so a 7 m carriageway tiles it twice across and every 3.5 m along.
+// At this scale aggregate chips are a couple of centimetres and the baked wheel
+// polish sits on the wheel paths.
+const ROAD_UV_SPAN = 2;
+const ROAD_UV_LENGTH = 3.5;
 const PHYSICS_RADIUS = 620;     // chunks with collision
 
 interface Chunk {
@@ -37,6 +41,10 @@ export interface WorldQuality {
   foliageDensity: number;
   shadows: boolean;
   anisotropy: number;
+  /** Terrain grid spacing for chunks near the player (metres). */
+  terrainRes: number;
+  /** Terrain grid spacing for distant chunks. */
+  terrainResFar: number;
 }
 
 export class GameWorld {
@@ -52,6 +60,7 @@ export class GameWorld {
   readonly chunks = new Map<string, Chunk>();
   private propGeometries: Record<PropType, THREE.BufferGeometry>;
   private roadMeshes: THREE.Mesh[] = [];
+  private farTerrain: THREE.Mesh | null = null;
   private water: THREE.Mesh;
   private buildQueue: { cx: number; cz: number; dist: number }[] = [];
 
@@ -83,6 +92,7 @@ export class GameWorld {
     this.propGeometries = buildPropGeometries();
 
     this.buildRoadMeshes();
+    this.buildFarTerrain();
 
     // --- sea ---
     const waterGeo = new THREE.PlaneGeometry(WORLD_SIZE * 1.6, WORLD_SIZE * 1.6, 1, 1);
@@ -194,7 +204,7 @@ export class GameWorld {
           const pz = s.z + nz * halfW * f;
           g.positions.push(px, this.heightAt(px, pz) + ROAD_LIFT, pz);
           g.normals.push(0, 1, 0);
-          g.uvs.push((f + 1) * 0.5, s.s / 8);
+          g.uvs.push((f + 1) * 0.5 * ROAD_UV_SPAN, s.s / ROAD_UV_LENGTH);
         }
         if (i > 0) {
           const rowA = baseIndex + (i - 1) * SPAN.length;
@@ -205,25 +215,41 @@ export class GameWorld {
         }
       }
 
-      // Centre line markings for asphalt roads
+      // Road paint: a dashed centre line plus solid edge lines. Each strip is
+      // a ribbon following the same samples as the road, lifted 2 cm, so the
+      // paint follows crests and camber exactly like the tarmac underneath.
       if (key === 'asphalt') {
-        const step = 4;
-        for (let i = 0; i < inst.samples.length - step; i += step * 2) {
-          const s = inst.samples[i];
-          const s2 = inst.samples[Math.min(i + step, inst.samples.length - 1)];
-          const nx = -s.dz, nz = s.dx;
-          const w = 0.09;
-          const y1 = this.heightAt(s.x, s.z) + ROAD_LIFT + 0.02;
-          const y2 = this.heightAt(s2.x, s2.z) + ROAD_LIFT + 0.02;
+        const addStrip = (
+          from: number,
+          to: number,
+          offset: number,
+          width: number,
+        ) => {
           const b = markingPositions.length / 3;
-          markingPositions.push(
-            s.x + nx * w, y1, s.z + nz * w,
-            s.x - nx * w, y1, s.z - nz * w,
-            s2.x + nx * w, y2, s2.z + nz * w,
-            s2.x - nx * w, y2, s2.z - nz * w,
-          );
-          markingIndices.push(b, b + 1, b + 2, b + 1, b + 3, b + 2);
-        }
+          for (let i = from; i <= to; i++) {
+            const s = inst.samples[i];
+            const nx = -s.dz, nz = s.dx;
+            const y = this.heightAt(s.x + nx * offset, s.z + nz * offset) + ROAD_LIFT + 0.025;
+            const ox = s.x + nx * offset, oz = s.z + nz * offset;
+            markingPositions.push(
+              ox + nx * width, y, oz + nz * width,
+              ox - nx * width, y, oz - nz * width,
+            );
+          }
+          for (let i = from; i < to; i++) {
+            const r0 = b + (i - from) * 2;
+            const r1 = r0 + 2;
+            markingIndices.push(r0, r0 + 1, r1, r0 + 1, r1 + 1, r1);
+          }
+        };
+        const last = inst.samples.length - 1;
+        // Dashed centre line: 12 m painted, 12 m gap.
+        const dash = 3; // samples (5 m spacing)
+        for (let i = 0; i + dash <= last; i += dash * 2) addStrip(i, i + dash, 0, 0.1);
+        // Solid edge lines, inset from the shoulder.
+        const edge = halfW - 0.45;
+        addStrip(0, last, edge, 0.09);
+        addStrip(0, last, -edge, 0.09);
       }
     }
 
@@ -247,7 +273,12 @@ export class GameWorld {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(markingPositions, 3));
       geo.setIndex(markingIndices);
-      geo.computeVertexNormals();
+      // Paint lies flat on the road: force an up normal. Deriving normals from
+      // the ribbon winding leaves them pointing into the ground on half the
+      // strips, which shades the paint black and hides it against the tarmac.
+      const nrm = new Float32Array(markingPositions.length);
+      for (let i = 1; i < nrm.length; i += 3) nrm[i] = 1;
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
       const mesh = new THREE.Mesh(geo, this.materials.markings);
       mesh.matrixAutoUpdate = false;
       this.scene.add(mesh);
@@ -318,7 +349,7 @@ export class GameWorld {
       instanceList: [], meshGroup: new THREE.Group(),
     };
     this.chunks.set(key, chunk);
-    this.buildChunkMesh(chunk, VIS_NEAR_RES);
+    this.buildChunkMesh(chunk, this.quality.terrainRes);
     this.buildChunkProps(chunk);
     this.buildChunkCollider(chunk);
     this.scene.add(chunk.meshGroup);
@@ -334,11 +365,91 @@ export class GameWorld {
   }
 
   private updateChunkLod(chunk: Chunk, dist: number) {
-    const wantRes = dist < 620 ? VIS_NEAR_RES : VIS_FAR_RES;
+    const wantRes = dist < 620 ? this.quality.terrainRes : this.quality.terrainResFar;
     if (wantRes !== chunk.visRes) this.buildChunkMesh(chunk, wantRes);
     const wantPhysics = dist < PHYSICS_RADIUS;
     if (wantPhysics && !chunk.body) this.buildChunkCollider(chunk);
     else if (!wantPhysics && chunk.body) { this.rapier.removeRigidBody(chunk.body); chunk.body = null; }
+  }
+
+  /**
+   * Distant landscape.
+   *
+   * Chunks only exist within `VIEW_RADIUS`, so without this the horizon is the
+   * sea plane and the world looks like an island. This coarse mesh covers the
+   * whole map at 48 m resolution from the same height field, is pushed down a
+   * couple of metres so the detailed chunks always win the depth test, and
+   * supplies the mountain silhouettes, valley haze and horizon colour.
+   */
+  private buildFarTerrain() {
+    // Extends well past the playable map (baseHeight is defined everywhere) so
+    // the land meets the true horizon instead of ending in a strip of ocean.
+    const FAR_SIZE = WORLD_SIZE * 3.2;
+    const N = 150;
+    const step = FAR_SIZE / N;
+    const farHalf = FAR_SIZE * 0.5;
+    const positions = new Float32Array((N + 1) * (N + 1) * 3);
+    const colors = new Float32Array((N + 1) * (N + 1) * 3);
+    const detail = new Float32Array((N + 1) * (N + 1) * 3);
+    const uvs = new Float32Array((N + 1) * (N + 1) * 2);
+    for (let j = 0; j <= N; j++) {
+      for (let i = 0; i <= N; i++) {
+        const idx = j * (N + 1) + i;
+        const x = -farHalf + i * step;
+        const z = -farHalf + j * step;
+        // Outside the playable map we only have the base field (no road
+        // corridors), which is exactly what we want for a distant silhouette.
+        const inside = Math.abs(x) < HALF_WORLD - 400 && Math.abs(z) < HALF_WORLD - 400;
+        const base = inside ? this.heightAt(x, z) : baseHeight(x, z);
+        const y = Math.max(base + distantRidge(x, z) - 1.8, -3.0);
+        positions[idx * 3] = x;
+        positions[idx * 3 + 1] = y;
+        positions[idx * 3 + 2] = z;
+        uvs[idx * 2] = (x + farHalf) / 80;
+        uvs[idx * 2 + 1] = (z + farHalf) / 80;
+        const hAt = (px: number, pz: number) =>
+          (Math.abs(px) < HALF_WORLD - 400 && Math.abs(pz) < HALF_WORLD - 400 ? this.heightAt(px, pz) : baseHeight(px, pz)) + distantRidge(px, pz);
+        const slope = Math.hypot(
+          hAt(x + step, z) - hAt(x - step, z),
+          hAt(x, z + step) - hAt(x, z - step),
+        ) / (2 * step);
+        const c = biomeColor(x, z, y, slope);
+        colors[idx * 3] = c[0]; colors[idx * 3 + 1] = c[1]; colors[idx * 3 + 2] = c[2];
+        const bw = biomeWeights(x, z);
+        const sand = clamp(bw.desert * 0.9 + bw.coast * 0.7, 0, 1);
+        const rock = clamp((slope - 0.25) * 2 + bw.volcanic * 0.8, 0, 1);
+        const green = clamp(0.6 + bw.farm * 0.4 + bw.jungle * 0.4, 0, 1);
+        const total = green + sand + rock + 1e-4;
+        detail[idx * 3] = green / total;
+        detail[idx * 3 + 1] = sand / total;
+        detail[idx * 3 + 2] = rock / total;
+      }
+    }
+    const indices: number[] = [];
+    for (let j = 0; j < N; j++) {
+      for (let i = 0; i < N; i++) {
+        const a = j * (N + 1) + i;
+        const b = a + 1;
+        const c = a + (N + 1);
+        const d = c + 1;
+        indices.push(a, c, b, b, c, d);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    geo.setAttribute('aDetail', new THREE.BufferAttribute(detail, 3));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    geo.computeBoundingSphere();
+    const mesh = new THREE.Mesh(geo, this.materials.terrain);
+    mesh.matrixAutoUpdate = false;
+    mesh.renderOrder = -1;
+    mesh.receiveShadow = false;
+    mesh.castShadow = false;
+    this.scene.add(mesh);
+    this.farTerrain = mesh;
   }
 
   // --------------------------------------------------------------- terrain
@@ -358,6 +469,9 @@ export class GameWorld {
         heights[j * n + i] = this.heightAt(originX + i * res, originZ + j * res);
       }
     }
+    // Per-vertex weights for the three ground detail sets, used by the terrain
+    // shader to blend grass/rock/sand micro-detail (and its normals).
+    const detail = new Float32Array(n * n * 3);
     for (let j = 0; j < n; j++) {
       for (let i = 0; i < n; i++) {
         const idx = j * n + i;
@@ -373,6 +487,17 @@ export class GameWorld {
         colors[idx * 3] = c[0]; colors[idx * 3 + 1] = c[1]; colors[idx * 3 + 2] = c[2];
         uvs[idx * 2] = (x + HALF_WORLD) / 40;
         uvs[idx * 2 + 1] = (z + HALF_WORLD) / 40;
+
+        const bw = biomeWeights(x, z);
+        const rocky = clamp((slope - 0.25) * 2.0, 0, 1);
+        const steepHigh = clamp((y - 120) / 160, 0, 1) * 0.7;
+        const sand = clamp(bw.desert * 0.95 + bw.coast * 0.7, 0, 1);
+        const rock = clamp(rocky * 0.9 + bw.volcanic * 0.8 + steepHigh, 0, 1);
+        const green = clamp(bw.farm * 0.9 + bw.jungle + 0.55 + bw.town * 0.2, 0, 1);
+        const total = green + sand + rock + 1e-4;
+        detail[idx * 3] = green / total;
+        detail[idx * 3 + 1] = sand / total;
+        detail[idx * 3 + 2] = rock / total;
       }
     }
     for (let j = 0; j < n - 1; j++) {
@@ -385,6 +510,7 @@ export class GameWorld {
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    geo.setAttribute('aDetail', new THREE.BufferAttribute(detail, 3));
     geo.setIndex(indices);
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
@@ -540,6 +666,8 @@ export class GameWorld {
   }
 
   dispose() {
+    this.farTerrain?.geometry.dispose();
+    this.farTerrain = null;
     for (const [key, chunk] of this.chunks) this.unloadChunk(key, chunk);
     for (const m of this.roadMeshes) { m.geometry.dispose(); this.scene.remove(m); }
     this.scene.remove(this.water);

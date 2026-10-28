@@ -4,3 +4,7 @@ dist/
 .DS_Store
 .vite/
 coverage/
+# local visual-probe output, not part of the project
+scratch-*
+shot-*.png
+bootfail-*.png

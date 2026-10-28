@@ -3,6 +3,7 @@ import type { World as RapierWorld } from '@dimforge/rapier3d-compat';
 import { clamp } from '../core/math';
 import { TrafficDriver } from '../gameplay/ai';
 import { VehicleActor } from '../gameplay/vehicleActor';
+import type { SharedUniforms } from '../render/materials';
 import { resolveParams, defaultTuning } from '../vehicles/tuning';
 import { blankUpgrades } from '../core/save';
 import { getCar, CARS } from '../data/cars';
@@ -31,6 +32,7 @@ export class TrafficManager {
   maxCars = 7;
   private assists: AssistSettings;
   private sampler: SurfaceSampler;
+  private shared: SharedUniforms;
   private scene: THREE.Scene;
   private rapier: RapierWorld;
   private rnd = mulberry32(8821);
@@ -39,11 +41,18 @@ export class TrafficManager {
   despawnRadius = 420;
   private spawnTimer = 0;
 
-  constructor(scene: THREE.Scene, rapier: RapierWorld, assists: AssistSettings, sampler: SurfaceSampler) {
+  constructor(
+    scene: THREE.Scene,
+    rapier: RapierWorld,
+    assists: AssistSettings,
+    sampler: SurfaceSampler,
+    shared: SharedUniforms,
+  ) {
     this.scene = scene;
     this.rapier = rapier;
     this.assists = { ...assists, autoGears: true };
     this.sampler = sampler;
+    this.shared = shared;
   }
 
   private spawn(world: GameWorld, playerPos: THREE.Vector3) {
@@ -81,6 +90,7 @@ export class TrafficManager {
       const actor = new VehicleActor(this.rapier, params, {
         spec, appearance: { color: COLORS[Math.floor(this.rnd() * COLORS.length)], finish: 'gloss' },
         isPlayer: false, name: 'Traffic', assists: this.assists, simDamage: true, surfaceSampler: this.sampler,
+        shared: this.shared,
       });
       actor.place(x, y, z, yaw);
       actor.sim.body.setLinvel({ x: sample.dx * dir * 11, y: 0, z: sample.dz * dir * 11 }, true);

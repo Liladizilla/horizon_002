@@ -19,7 +19,7 @@ import * as THREE from 'three';
 import type RAPIER from '@dimforge/rapier3d-compat';
 
 import { GameWorld } from './world/world';
-import { createMaterials } from './render/materials';
+import { createMaterials, type MaterialSet } from './render/materials';
 import { Renderer } from './render/scene';
 import { CameraRig } from './render/cameraRig';
 import { Hud, type MapMarker, type HudState } from './ui/hud';
@@ -119,6 +119,7 @@ export class Game {
   private netAccum = 0;
   private remoteCars = new Map<string, THREE.Object3D>();
   private distanceKm = 0;
+  materials!: MaterialSet;
 
   constructor(canvas: HTMLCanvasElement, rapier: typeof RAPIER, settings: GameSettings) {
     this.rapier = rapier;
@@ -167,11 +168,16 @@ export class Game {
   async init(onProgress: (fraction: number, label: string) => void = () => {}) {
     onProgress(0.05, 'Creating the physics world…');
     const rapierWorld = new this.rapier.World({ x: 0, y: -9.81, z: 0 });
-    const materials = createMaterials({ anisotropic: this.settings.quality === 'low' ? 1 : 8 });
-    this.world = new GameWorld(this.renderer.scene, rapierWorld, materials, {
+    const aniso = this.settings.quality === 'low' ? 2 : this.settings.quality === 'ultra' ? 16 : 8;
+    this.materials = createMaterials({ anisotropy: aniso, groundDetail: this.settings.quality !== 'low' });
+    this.world = new GameWorld(this.renderer.scene, rapierWorld, this.materials, {
       foliageDensity: this.settings.foliageDensity,
       shadows: this.settings.shadows,
-      anisotropy: this.settings.quality === 'low' ? 1 : 8,
+      anisotropy: aniso,
+      // 2 m near the player on high/ultra, 8 m on low: this is the single
+      // biggest lever on how "modelled" the terrain looks.
+      terrainRes: this.settings.quality === 'ultra' ? 2 : this.settings.quality === 'high' ? 4 : 8,
+      terrainResFar: this.settings.quality === 'low' ? 16 : 8,
     });
 
     this.world.rapier.timestep = FIXED_DT;
@@ -286,6 +292,7 @@ export class Game {
       assists: this.settings.assist,
       simDamage: this.settings.simulationMode,
       surfaceSampler: this.surfaceSampler,
+      shared: this.materials.shared,
     });
     // A brand-new profile spawns on the festival loop just outside the town
     // square: scenery, road furniture and the first event are all in view.
@@ -317,6 +324,7 @@ export class Game {
         assists: { abs: true, tractionControl: true, stabilityControl: true, steeringAssist: 0.4, autoGears: true, rewind: false, racingLine: false, brakingAssist: 0.3 },
         simDamage: false,
         surfaceSampler: this.surfaceSampler,
+        shared: this.materials.shared,
       });
       const yaw = Math.atan2(sample.dx, sample.dz);
       actor.place(sample.x, this.world.driveY(sample.x, sample.z) + 0.7, sample.z, yaw);
@@ -357,6 +365,7 @@ export class Game {
         assists: { abs: true, tractionControl: true, stabilityControl: true, steeringAssist: 0.25, autoGears: true, rewind: false, racingLine: false, brakingAssist: 0.2 },
         simDamage: false,
         surfaceSampler: this.surfaceSampler,
+        shared: this.materials.shared,
       });
       actor.place(pose.x, this.world.driveY(pose.x, pose.z) + 0.7, pose.z, pose.yaw);
       actor.captureState();
@@ -779,6 +788,9 @@ export class Game {
     }, (x, z) => this.world.heightAt(x, z));
 
     const w = this.weather.state;
+    // One wetness value drives the road, terrain, foliage, buildings and paint.
+    this.materials.shared.wetness.value = w.wetness;
+    this.materials.shared.time.value += dt;
     this.renderer.updateEnvironment({
       sunDir: this.sunDirection(w.hour),
       hour: w.hour,
@@ -963,6 +975,63 @@ export class Game {
         triangles: this.renderer.renderer.info.render.triangles,
       },
     };
+  }
+
+  /** Renderer/lighting state for browser-side diagnostics. */
+  debugScene() {
+    const sun = this.renderer.sun;
+    return {
+      shadowMapEnabled: this.renderer.renderer.shadowMap.enabled,
+      sunCastShadow: sun.castShadow,
+      sunIntensity: +sun.intensity.toFixed(2),
+      shadowMapSize: sun.shadow.map ? sun.shadow.map.width : 0,
+      shadowCam: {
+        left: sun.shadow.camera.left, right: sun.shadow.camera.right,
+        near: sun.shadow.camera.near, far: sun.shadow.camera.far,
+      },
+      sunPos: sun.position.toArray().map((v) => +v.toFixed(1)),
+      toneExposure: +this.renderer.renderer.toneMappingExposure.toFixed(2),
+    };
+  }
+
+  /** Mesh inventory for browser-side diagnostics (used by the visual probes). */
+  debugMeshes() {
+    const out: {
+      material: string;
+      map: boolean;
+      color?: string;
+      verts: number;
+      nan: boolean;
+      minY: number;
+      maxY: number;
+      visible: boolean;
+    }[] = [];
+    this.renderer.scene.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (!(mesh as unknown as { isMesh?: boolean }).isMesh || !mesh.material) return;
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      const pos = mesh.geometry?.attributes?.position;
+      let nan = false, minY = Infinity, maxY = -Infinity;
+      if (pos) {
+        for (let i = 0; i < pos.count; i++) {
+          const y = pos.getY(i);
+          if (Number.isNaN(y)) { nan = true; break; }
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+      out.push({
+        material: mat.type + (mat.name ? `:${mat.name}` : ''),
+        map: Boolean(mat.map),
+        color: mat.color?.getHexString(),
+        verts: pos?.count ?? 0,
+        nan,
+        minY: Number.isFinite(minY) ? +minY.toFixed(1) : 0,
+        maxY: Number.isFinite(maxY) ? +maxY.toFixed(1) : 0,
+        visible: mesh.visible,
+      });
+    });
+    return out;
   }
 
   get hudText() { return (this.hud.root?.innerText ?? '').slice(0, 400); }

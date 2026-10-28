@@ -6,6 +6,7 @@ import { baseHeight, biomeWeights, biomeColor, distantRidge, WORLD_SIZE, SEA_LEV
 import { buildRoadNetwork, RoadGraph, type RoadField, type RoadInstance } from './roads';
 import { generateChunkProps, CHUNK_SIZE, type PropInstance, type PropType } from './props';
 import { buildPropGeometries, propMaterial, BUILDING_TINTS } from '../render/worldMeshes';
+import { GroundCover, type CoverPlacement } from '../render/groundCover';
 import type { MaterialSet } from '../render/materials';
 import { mulberry32, hash2 } from '../core/rng';
 
@@ -45,6 +46,8 @@ export interface WorldQuality {
   terrainRes: number;
   /** Terrain grid spacing for distant chunks. */
   terrainResFar: number;
+  /** Near-field grass/scrub layer; off on the lowest preset. */
+  groundCover: boolean;
 }
 
 export class GameWorld {
@@ -61,6 +64,8 @@ export class GameWorld {
   private propGeometries: Record<PropType, THREE.BufferGeometry>;
   private roadMeshes: THREE.Mesh[] = [];
   private farTerrain: THREE.Mesh | null = null;
+  private groundCover: GroundCover | null = null;
+  private coverPlacement: CoverPlacement;
   private water: THREE.Mesh;
   private buildQueue: { cx: number; cz: number; dist: number }[] = [];
 
@@ -93,6 +98,31 @@ export class GameWorld {
 
     this.buildRoadMeshes();
     this.buildFarTerrain();
+
+    this.coverPlacement = {
+      heightAt: (x, z) => this.heightAt(x, z),
+      isBare: (x, z, y) => this.isBare(x, z, y),
+      bareReason: (x, z, y) => this.bareReason(x, z, y),
+      tintAt: (x, z) => {
+        const y = this.heightAt(x, z);
+        const e = 1.5;
+        const slope = Math.hypot(
+          this.heightAt(x + e, z) - this.heightAt(x - e, z),
+          this.heightAt(x, z + e) - this.heightAt(x, z - e),
+        ) / (2 * e);
+        const c = biomeColor(x, z, y, slope);
+        return [c[0] / 0.3, c[1] / 0.3, c[2] / 0.3];
+      },
+    };
+    if (quality.groundCover) {
+      this.groundCover = new GroundCover({
+        radius: 76,
+        density: 0.4 + quality.foliageDensity * 0.35,
+        sway: 0.055,
+        shared: materials.shared,
+      });
+      scene.add(this.groundCover.mesh);
+    }
 
     // --- sea ---
     const waterGeo = new THREE.PlaneGeometry(WORLD_SIZE * 1.6, WORLD_SIZE * 1.6, 1, 1);
@@ -291,6 +321,7 @@ export class GameWorld {
 
   update(playerPos: THREE.Vector3, budgetMs = 6) {
     const start = performance.now();
+    this.groundCover?.update(playerPos.x, playerPos.z, this.coverPlacement);
     const pcx = Math.floor(playerPos.x / CHUNK_SIZE);
     const pcz = Math.floor(playerPos.z / CHUNK_SIZE);
     const maxChunkRadius = Math.ceil(VIEW_RADIUS / CHUNK_SIZE);
@@ -618,6 +649,7 @@ export class GameWorld {
       const matKey = propMaterial(type);
       const material = matKey === 'rock' ? this.materials.rock : matKey === 'building' ? this.materials.building : this.materials.foliage;
       const mesh = new THREE.InstancedMesh(geo, material, list.length);
+      mesh.userData.propType = type; // diagnostics: prop coverage counts
       mesh.castShadow = this.quality.shadows && type !== 'bush';
       mesh.receiveShadow = false;
       mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
@@ -665,7 +697,42 @@ export class GameWorld {
     return { x, y: this.driveY(x, z) + 0.5, z, yaw: 0 };
   }
 
+  /** Ground-cover telemetry: instance count and rebuild cost. */
+  coverStats() {
+    return this.groundCover
+      ? {
+          instances: this.groundCover.instanceCount,
+          rebuildMs: +this.groundCover.lastRebuildMs.toFixed(2),
+          rejections: this.groundCover.rejections,
+        }
+      : { instances: 0, rebuildMs: 0 };
+  }
+
+  /** True where ground cover must not grow. */
+  private isBare(x: number, z: number, y: number): boolean {
+    return this.bareReason(x, z, y) !== null;
+  }
+
+  /** Rejection reason for the cover layer (null = grass grows here). */
+  private bareReason(x: number, z: number, y: number): string | null {
+    if (y < SEA_LEVEL + 0.5) return 'water';
+    if (y > 240 + (Math.sin(x * 0.01) + Math.cos(z * 0.013)) * 12) return 'snow';
+    const road = this.field.nearest(x, z);
+    if (road.sample && road.dist < road.sample.width * 0.62) return 'road';
+    const w = biomeWeights(x, z);
+    if (w.desert > 0.3) return 'desert';
+    if (w.volcanic > 0.5) return 'volcanic';
+    const e = 1.2;
+    const slope = Math.hypot(
+      this.heightAt(x + e, z) - this.heightAt(x - e, z),
+      this.heightAt(x, z + e) - this.heightAt(x, z - e),
+    ) / (2 * e);
+    if (slope > 0.55) return 'steep';
+    return null;
+  }
+
   dispose() {
+    this.groundCover?.dispose();
     this.farTerrain?.geometry.dispose();
     this.farTerrain = null;
     for (const [key, chunk] of this.chunks) this.unloadChunk(key, chunk);

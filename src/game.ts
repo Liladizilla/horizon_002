@@ -178,6 +178,7 @@ export class Game {
       // biggest lever on how "modelled" the terrain looks.
       terrainRes: this.settings.quality === 'ultra' ? 2 : this.settings.quality === 'high' ? 4 : 8,
       terrainResFar: this.settings.quality === 'low' ? 16 : 8,
+      groundCover: this.settings.quality !== 'low' && this.settings.foliageDensity > 0.05,
     });
 
     this.world.rapier.timestep = FIXED_DT;
@@ -1033,6 +1034,34 @@ export class Game {
     });
     return out;
   }
+
+  /**
+   * Test hook: move the player to the nearest road to (x, z) and run the world
+   * streamer long enough to fill the ring, so browser probes can inspect any
+   * biome without driving there first.
+   */
+  debugTeleport(x: number, z: number) {
+    const spawn = this.world.safeRespawn(x, z);
+    this.player.place(spawn.x, spawn.y + 0.7, spawn.z, spawn.yaw);
+    this.player.captureState();
+    for (let i = 0; i < 40; i++) this.world.update(this.player.position, 200);
+    return { x: spawn.x, y: spawn.y, z: spawn.z };
+  }
+
+  /** Prop instance counts for the loaded ring, used to verify scenery coverage. */
+  debugProps() {
+    const counts: Record<string, number> = {};
+    this.renderer.scene.traverse((obj) => {
+      const mesh = obj as THREE.InstancedMesh;
+      if (!(mesh as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) return;
+      const key = mesh.userData.propType ?? mesh.name ?? 'prop';
+      counts[key] = (counts[key] ?? 0) + mesh.count;
+    });
+    return counts;
+  }
+
+  /** Ground-cover telemetry (instance count + rebuild time). */
+  debugCover() { return this.world.coverStats(); }
 
   get hudText() { return (this.hud.root?.innerText ?? '').slice(0, 400); }
   stepPhysicsManual(dt = 1 / 120) { this.stepPhysics(dt); }

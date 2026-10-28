@@ -188,6 +188,26 @@ function injectGroundDetail(material: THREE.MeshStandardMaterial, details: Groun
         detail = mix(vec3(dl), detail, 0.45);
         detail = clamp(detail, vec3(0.4), vec3(1.6));
         diffuseColor.rgb *= mix(vec3(1.0), detail, 0.95);
+        // ---- macro variation --------------------------------------------------
+        // Detail textures only carry 1-5 m scales; without a slower layer every
+        // field reads as one flat wash. Two octaves of cheap value noise break
+        // the ground into patches of growth, dry grass and shadowed hollows.
+        {
+          vec2 p = vWPos.xz;
+          vec2 i1 = floor(p * 0.075);
+          vec2 i2 = floor(p * 0.021);
+          float n1 = fract(sin(dot(i1, vec2(127.1, 311.7))) * 43758.5453);
+          float n2 = fract(sin(dot(i2, vec2(269.5, 183.3))) * 41337.1234);
+          float patchA = mix(0.72, 1.18, n1);
+          float patchB = mix(0.82, 1.14, n2);
+          diffuseColor.rgb *= patchA * patchB;
+          // Warm, straw-coloured dry patches on the larger octave.
+          diffuseColor.rgb = mix(
+            diffuseColor.rgb,
+            diffuseColor.rgb * vec3(1.18, 1.06, 0.72),
+            smoothstep(0.62, 0.98, n2) * 0.45
+          );
+        }
         // Flat, low ground collects water and turns dark and glossy.
         float damp = uWetness * mix(0.35, 1.0, vFlat);
         diffuseColor.rgb *= mix(1.0, 0.5, damp);

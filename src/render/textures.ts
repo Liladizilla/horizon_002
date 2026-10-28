@@ -421,3 +421,67 @@ export function makeFoliageMaps(aniso = 4): SurfaceMaps {
   }, aniso);
   return { map, normalMap: normalMapFrom(height, size, 2.0, aniso), roughnessMap: glossFrom(size, (x, y, i) => 0.72 + leaves[i] * 0.24, aniso), size };
 }
+
+// ---------------------------------------------------------------------------
+// Ground cover
+// ---------------------------------------------------------------------------
+
+/**
+ * Grass tuft atlas for the ground-cover layer.
+ *
+ * Drawn as tapered blades with a darker root, a lighter tip and slight lateral
+ * lean, on a transparent background. Used with `alphaTest` (not blending) so
+ * thousands of tufts can be drawn in one instanced pass without sorting.
+ */
+export function makeGrassTuftTexture(size = 256): THREE.CanvasTexture {
+  const { canvas, ctx } = canvasFrom(size);
+  ctx.clearRect(0, 0, size, size);
+  const rnd = mulberry32(20271);
+  const blades = 26;
+  for (let i = 0; i < blades; i++) {
+    const baseX = size * (0.12 + rnd() * 0.76);
+    const height = size * (0.45 + rnd() * 0.5);
+    const width = size * (0.013 + rnd() * 0.019);
+    const lean = (rnd() - 0.5) * size * 0.22;
+    const tipX = baseX + lean;
+    const tipY = size - height;
+    // Hue varies per blade so a tuft is not one flat green.
+    const hue = 88 + rnd() * 34;
+    const sat = 30 + rnd() * 24;
+    const light = 34 + rnd() * 22;
+    const grad = ctx.createLinearGradient(baseX, size, tipX, tipY);
+    grad.addColorStop(0, `hsl(${hue}, ${sat}%, ${light * 0.62}%)`);
+    grad.addColorStop(0.65, `hsl(${hue}, ${sat}%, ${light}%)`);
+    grad.addColorStop(1, `hsl(${hue + 6}, ${sat * 0.8}%, ${light * 1.5}%)`);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(baseX - width, size);
+    ctx.quadraticCurveTo(baseX - width * 0.4, size - height * 0.55, tipX, tipY);
+    ctx.quadraticCurveTo(baseX + width * 0.4, size - height * 0.55, baseX + width, size);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // Colour bleed: fill the transparent background with the average blade
+  // colour. Without this, mipmapping averages the blades with black and distant
+  // tufts turn into dark clumps instead of thinning out.
+  const img = ctx.getImageData(0, 0, size, size);
+  let ar = 0, ag = 0, ab = 0, count = 0;
+  for (let i = 0; i < img.data.length; i += 4) {
+    if (img.data[i + 3] > 200) {
+      ar += img.data[i]; ag += img.data[i + 1]; ab += img.data[i + 2]; count++;
+    }
+  }
+  if (count > 0) {
+    ar /= count; ag /= count; ab /= count;
+    for (let i = 0; i < img.data.length; i += 4) {
+      const a = img.data[i + 3] / 255;
+      img.data[i] = img.data[i] * a + ar * (1 - a);
+      img.data[i + 1] = img.data[i + 1] * a + ag * (1 - a);
+      img.data[i + 2] = img.data[i + 2] * a + ab * (1 - a);
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+  const tex = finishTexture(canvas, true, 4);
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  return tex;
+}

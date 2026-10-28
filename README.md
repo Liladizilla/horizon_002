@@ -155,7 +155,9 @@ at boot.
   (valleys haze, peaks stay crisp), wetness that darkens albedo and drops
   roughness on flat ground, animated water ripples, and a tri-biome ground-detail
   pass that blends grass/sand/rock detail albedo *and* detail normals from
-  bake-time biome weights plus slope, at two rotated scales to hide tiling.
+  bake-time biome weights plus slope, at two rotated scales to hide tiling, on
+  top of two octaves of macro variation that break big fields into patches of
+  growth, dry straw and shaded hollows.
 - **Car modelling** (`src/render/carMesh.ts`) — bodies are lofted from rounded
   rectangular cross-sections per body style (supercar, coupe, muscle, hatch,
   sedan, SUV, truck, van, buggy) with caps, arch liners and arch lips, separate
@@ -168,6 +170,14 @@ at boot.
   shadows and a wide 340 m cascade for the landscape), a procedural cloud dome
   with sun-forward scattering, per-car contact-shadow blobs that fade with wheel
   load, and a filmic grade with split toning, grain and vignette.
+- **Ground cover** (`src/render/groundCover.ts`) — crossed alpha-cutout grass
+  cards in a 76 m disc that follows the camera, wind-swayed in the vertex shader
+  and tinted from the biome colour beneath them. Placement is a hashed jittered
+  grid (deterministic, no per-chunk bookkeeping) that skips tarmac, shoulders,
+  water, snow, desert, volcanic ground and steep slopes using the same queries
+  the tyres use; density fades toward the rim so the disc edge is not a circle.
+  Rebuilds only when the camera has moved 6 m (~3-12 ms), so cost is flat.
+  Measured: ~150 instances on the coastal start, ~2 000 inland.
 - **World dressing** — the horizon is closed by a coarse distant-landscape mesh
   plus procedural ridge systems beyond the playable square, roads carry painted
   lane markings that follow crests and camber, and props are multi-part
@@ -259,6 +269,14 @@ npm test          # 6 suites, 48 tests, all headless (no browser, no GPU)
 | `tests/ai.test.ts` | the AI drives a closed circuit on its own physics, stays on the road, lifts/brakes for corners |
 | `tests/save.test.ts` | save round-trip, corrupt-save repair, old-save migration, payouts, unlocks, wheelspins, buying cars, upgrade/tuning defaults |
 
+The browser probes (`scripts/smoke.mjs` and the local visual scripts) drive the
+game through a small debug surface on `window.horizonDrive`: `debugTeleport(x,
+z)` moves the car to the nearest road and fills the stream ring so any biome can
+be inspected without driving there, `debugProps()` counts instanced scenery by
+type, `debugCover()` reports ground-cover instance count, rebuild time and
+rejection reasons, and `debugMeshes()`/`debugScene()` dump geometry, material
+and shadow state.
+
 `tests/stubWorld.ts` is a headless stand-in for `GameWorld` so world-dependent
 logic (routes, races) can be tested in Node without Three.js or WebGL.
 
@@ -317,6 +335,9 @@ the README says so rather than pretending otherwise.
   are normal-mapped and AO'd, cars are lofted procedural bodies, and the sky,
   clouds and shadows are real-time only. Populated foliage thins out with
   distance and the LOD swap is visible if you stop and stare at a treeline.
+* **Ground cover is a disc, not a texture.** Grass exists within ~76 m of the
+  camera and thins out at the rim; on the coastal start there is little of it
+  because the shelf is water, sand and tarmac.
 * **Rendering cost is real.** Measured on the headless reference run: ~1.6 k draw
   calls and 710 k triangles per frame once shadows are counted (a further ~1.2 M
   triangles when `high` enables the far cascade). Low-end machines should use the

@@ -32,7 +32,6 @@ export interface GameSettings {
   bloom: boolean;
   reducedMotion: boolean;
   /** Ground-truth ambient occlusion pass (contact shadows). */
-  ambientOcclusion: boolean;
   colorBlind: 'off' | 'protanopia' | 'deuteranopia' | 'tritanopia';
   uiScale: number;
   showSubtitles: boolean;
@@ -72,7 +71,6 @@ export const DEFAULT_SETTINGS: GameSettings = {
   motionBlur: false,
   bloom: true,
   reducedMotion: false,
-  ambientOcclusion: true,
   colorBlind: 'off',
   uiScale: 1,
   showSubtitles: true,
@@ -111,10 +109,10 @@ export const DIFFICULTY_PRESETS: Record<DifficultyPreset, Partial<AssistSettings
 };
 
 export const QUALITY_PRESETS: Record<QualityPreset, Partial<GameSettings>> = {
-  low: { renderScale: 0.7, shadowMapSize: 1024, shadows: true, reflections: false, particleDensity: 0.35, foliageDensity: 0.35, antialias: 'off', bloom: false, ambientOcclusion: false },
-  medium: { renderScale: 0.85, shadowMapSize: 2048, shadows: true, reflections: false, particleDensity: 0.6, foliageDensity: 0.6, antialias: 'smaa', bloom: true, ambientOcclusion: true },
-  high: { renderScale: 1, shadowMapSize: 2048, shadows: true, reflections: true, particleDensity: 0.8, foliageDensity: 0.8, antialias: 'smaa', bloom: true, ambientOcclusion: true },
-  ultra: { renderScale: 1.15, shadowMapSize: 4096, shadows: true, reflections: true, particleDensity: 1, foliageDensity: 1, antialias: 'taa', bloom: true, ambientOcclusion: true },
+  low: { renderScale: 0.7, shadowMapSize: 1024, shadows: true, reflections: false, particleDensity: 0.35, foliageDensity: 0.35, antialias: 'off', bloom: false },
+  medium: { renderScale: 0.85, shadowMapSize: 2048, shadows: true, reflections: false, particleDensity: 0.6, foliageDensity: 0.6, antialias: 'smaa', bloom: true },
+  high: { renderScale: 1, shadowMapSize: 2048, shadows: true, reflections: true, particleDensity: 0.8, foliageDensity: 0.8, antialias: 'smaa', bloom: true },
+  ultra: { renderScale: 1.15, shadowMapSize: 4096, shadows: true, reflections: true, particleDensity: 1, foliageDensity: 1, antialias: 'taa', bloom: true },
 };
 
 const KEY = 'horizon-drive.settings.v3';

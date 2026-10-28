@@ -247,6 +247,7 @@ export class CarMesh {
   spec: VehicleSpec;
   private wheelRadius: number;
   private steeringWheel: THREE.Object3D | null = null;
+  private contactShadow: THREE.Mesh | null = null;
   private shared: SharedUniforms;
 
   constructor(spec: VehicleSpec, appearance: CarAppearance, shared: SharedUniforms) {
@@ -257,6 +258,7 @@ export class CarMesh {
     this.paintMaterial = mats.paint;
     this.glassMaterial = mats.glass;
     this.group.add(this.bodyGroup);
+    this.buildContactShadow(spec);
     this.buildBody(spec, mats);
     this.buildWheels(spec, mats);
     this.buildInterior(spec, mats);
@@ -264,6 +266,54 @@ export class CarMesh {
       const m = o as THREE.Mesh;
       if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; }
     });
+  }
+
+  /**
+   * Contact shadow.
+   *
+   * The shadow cascades are 2048 px over 84 m, so the darkest, crispest place a
+   * car touches the ground — right under the sills — is the one the map cannot
+   * resolve. This is a soft multiply blob under the body that fades with speed
+   * and ride height, which is what actually sells the car as sitting *on* the
+   * road rather than floating above it.
+   */
+  private buildContactShadow(spec: VehicleSpec) {
+    const w = spec.width * 1.12;
+    const l = spec.length * 1.04;
+    const geo = new THREE.PlaneGeometry(w, l);
+    geo.rotateX(-Math.PI / 2);
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      uniforms: {
+        uOpacity: { value: 0.62 },
+        uSize: { value: new THREE.Vector2(w, l) },
+      },
+      vertexShader: /* glsl */`
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */`
+        varying vec2 vUv;
+        uniform float uOpacity;
+        void main() {
+          vec2 d = (vUv - 0.5) * 2.0;
+          // Soft-edged ellipse: dense in the middle, gone at the bumper.
+          float r = length(d * vec2(1.0, 0.72));
+          float a = smoothstep(1.0, 0.15, r) * uOpacity;
+          gl_FragColor = vec4(0.02, 0.02, 0.03, a);
+        }
+      `,
+    });
+    this.contactShadow = new THREE.Mesh(geo, mat);
+    this.contactShadow.position.y = 0.045;
+    this.contactShadow.renderOrder = 1;
+    this.contactShadow.castShadow = false;
+    this.contactShadow.receiveShadow = false;
+    this.group.add(this.contactShadow);
   }
 
   private buildBody(spec: VehicleSpec, mats: ReturnType<typeof createCarMaterials>) {
@@ -565,6 +615,16 @@ export class CarMesh {
       this.wheelSpinners[i].rotation.x = w.spinAngle;
     }
     if (this.steeringWheel) this.steeringWheel.rotation.z = -sim.wheels[0].steer * 4.2;
+    if (this.contactShadow) {
+      const contacts = sim.wheels.reduce((n, w) => n + (w.contact ? 1 : 0), 0);
+      // Fades out as wheels leave the ground, dims slightly at speed (the sun
+      // shadow blob spreads and softens rather than darkens).
+      const load = contacts / 4;
+      const speed = Math.min(1, Math.abs(sim.readout.speedKmh) / 180);
+      const mat = this.contactShadow.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = 0.62 * load * (1 - speed * 0.35);
+      this.contactShadow.visible = load > 0.01;
+    }
     const brakeIntensity = 0.4 + opts.braking * 3.2;
     for (const m of this.brakeLights) m.emissiveIntensity = brakeIntensity;
     for (const s of this.headLights) s.intensity = opts.headlightsOn ? 30 : 0;

@@ -164,19 +164,25 @@ at boot.
   ten spokes, hub, brake disc, caliper); interiors get dash, tunnel, seats and
   wheel; head/tail lights are emissive with real headlight spotlights.
 - **Lighting** (`src/render/scene.ts`) — Preetham sky modelled for IBL, two
-  shadow cascades (a tight 84 m box that follows the car for contact shadows and
-  a wide 340 m cascade for the landscape), a procedural cloud dome with
-  sun-forward scattering, a ground-truth ambient occlusion pass at medium and
-  above, and a filmic grade with split toning, grain and vignette.
+  shadow cascades (a tight 84 m box that follows the car for crisp contact
+  shadows and a wide 340 m cascade for the landscape), a procedural cloud dome
+  with sun-forward scattering, per-car contact-shadow blobs that fade with wheel
+  load, and a filmic grade with split toning, grain and vignette.
 - **World dressing** — the horizon is closed by a coarse distant-landscape mesh
   plus procedural ridge systems beyond the playable square, roads carry painted
   lane markings that follow crests and camber, and props are multi-part
   instanced geometry (layered conifer canopies, branched broadleaves, curved palm
   trunks, displaced rock, buildings with window bands and eaves).
 
-Quality presets gate the cost: `low` drops the AO pass, the far shadow cascade
-and ground detail entirely; `ultra` raises shadow resolution, anisotropy, terrain
-resolution and AO sampling.
+Quality presets gate the cost: `low` drops the far shadow cascade, ground detail
+and anisotropy; `ultra` raises shadow resolution, anisotropy and terrain
+resolution.
+
+A ground-truth AO pass was prototyped and **removed**: its depth/normal G-buffer
+reconstructed the 7 km sky sphere to garbage and flooded the horizon with the
+normal-buffer clear colour, and the cost was a second full scene render. It was
+replaced with shadow cascades plus per-car contact blobs, which cover the cue
+that actually matters (the car sitting on the road) without the artifact.
 
 ### Accessibility
 
@@ -311,11 +317,11 @@ the README says so rather than pretending otherwise.
   are normal-mapped and AO'd, cars are lofted procedural bodies, and the sky,
   clouds and shadows are real-time only. Populated foliage thins out with
   distance and the LOD swap is visible if you stop and stare at a treeline.
-* **Rendering cost is real.** Measured on the headless reference run: ~1.2 k draw
-  calls and 830 k triangles per frame at the default preset, rising to ~3.6 k
-  calls once both shadow cascades are counted. Low-end machines should use the
-  `low` preset (no AO pass, no far cascade, no ground detail) or the dynamic
-  resolution scaler.
+* **Rendering cost is real.** Measured on the headless reference run: ~1.6 k draw
+  calls and 710 k triangles per frame once shadows are counted (a further ~1.2 M
+  triangles when `high` enables the far cascade). Low-end machines should use the
+  `low` preset (no far cascade, no ground detail) or the dynamic resolution
+  scaler.
 * **No damage deformation.** Damage is a set of physical parameters (engine,
   steering, per-wheel grip); panels do not crumple and nothing breaks apart.
 * **Traffic is sparse and simple** (10 cars, lane follower, no overtaking logic).

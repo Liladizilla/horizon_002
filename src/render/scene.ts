@@ -4,7 +4,6 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
-import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { clamp, lerp, smoothstep } from '../core/math';
@@ -94,7 +93,6 @@ export class Renderer {
   sunFar: THREE.DirectionalLight;
   clouds: THREE.Mesh;
   private cloudUniforms: Record<string, THREE.IUniform>;
-  gtao: GTAOPass | null = null;
   hemi: THREE.HemisphereLight;
   ambient: THREE.AmbientLight;
   sky: Sky;
@@ -124,7 +122,7 @@ export class Renderer {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     // Draw-call accounting: with a composer the stats would otherwise be reset
     // by every pass, so the reported number is reset once per frame here and
-    // accumulates across the GTAO / grade passes.
+    // accumulates across the shadow, bloom and grade passes.
     this.renderer.info.autoReset = false;
 
     this.camera = new THREE.PerspectiveCamera(settings.fov, window.innerWidth / window.innerHeight, 0.35, 9000);
@@ -267,31 +265,11 @@ export class Renderer {
   private setupComposer() {
     const s = this.settings;
     const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-    if (s.antialias === 'off' && !s.bloom && !s.ambientOcclusion) { this.composer = null; return; }
+    if (s.antialias === 'off' && !s.bloom) { this.composer = null; return; }
     const composer = new EffectComposer(this.renderer);
     composer.setSize(window.innerWidth, window.innerHeight);
     void size;
     composer.addPass(new RenderPass(this.scene, this.camera));
-    if (s.ambientOcclusion) {
-      // Ground-truth ambient occlusion: gives contact darkening under cars,
-      // trees, buildings and kerbs — the cue that most reads as "modelled".
-      const gtao = new GTAOPass(this.scene, this.camera, window.innerWidth, window.innerHeight);
-      gtao.output = GTAOPass.OUTPUT.Default;
-      gtao.blendIntensity = 0.85;
-      const aoRadius = s.quality === 'ultra' ? 2.2 : 1.6;
-      gtao.updateGtaoMaterial({
-        radius: aoRadius,
-        distanceExponent: 1.6,
-        thickness: 1.2,
-        scale: 1.0,
-        samples: s.quality === 'ultra' ? 16 : 8,
-        distanceFallOff: 1.0,
-        screenSpaceRadius: false,
-      });
-      gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 4, rings: 2, samples: 8 });
-      composer.addPass(gtao);
-      this.gtao = gtao;
-    }
     if (s.bloom) {
       this.bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.32, 0.62, 0.86);
       composer.addPass(this.bloomPass);
@@ -308,7 +286,7 @@ export class Renderer {
 
   rebuildComposer() {
     if (this.composer) this.composer.dispose();
-    this.composer = null; this.bloomPass = null; this.gradePass = null; this.smaaPass = null; this.gtao = null;
+    this.composer = null; this.bloomPass = null; this.gradePass = null; this.smaaPass = null;
     this.setupComposer();
   }
 
@@ -337,7 +315,6 @@ export class Renderer {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(w, h, false);
     this.composer?.setSize(w, h);
-    this.gtao?.setSize(w, h);
   }
 
   /** Dynamic resolution: nudge render scale to hold the frame budget. */

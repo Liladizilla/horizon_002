@@ -123,9 +123,9 @@ export function biomeColor(x: number, z: number, height: number, slope: number):
   const rock: [number, number, number] = [0.115, 0.108, 0.1];
   const sand: [number, number, number] = [0.34, 0.29, 0.19];
   const dirt: [number, number, number] = [0.15, 0.11, 0.07];
-  const grass: [number, number, number] = [0.085, 0.125, 0.055];
-  const jungleGrass: [number, number, number] = [0.055, 0.095, 0.042];
-  const farm: [number, number, number] = [0.15, 0.165, 0.075];
+  const grass: [number, number, number] = [0.058, 0.085, 0.036];
+  const jungleGrass: [number, number, number] = [0.042, 0.075, 0.032];
+  const farm: [number, number, number] = [0.105, 0.115, 0.05];
   const snow: [number, number, number] = [0.62, 0.66, 0.72];
   const ash: [number, number, number] = [0.06, 0.055, 0.05];
   const townGround: [number, number, number] = [0.14, 0.14, 0.15];

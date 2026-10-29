@@ -10,7 +10,7 @@ export interface PropInstance {
   tilt?: number;
 }
 
-export type PropType = 'treePine' | 'treeBroad' | 'palm' | 'cactus' | 'rock' | 'bush' | 'building' | 'barn' | 'sign' | 'fence' | 'haybale' | 'barrier' | 'speaker';
+export type PropType = 'treePine' | 'treeBroad' | 'palm' | 'cactus' | 'rock' | 'bush' | 'building' | 'barn' | 'sign' | 'fence' | 'haybale' | 'barrier' | 'speaker' | 'delineator' | 'pole';
 
 export interface PropCollider {
   x: number; y: number; z: number;

@@ -178,6 +178,21 @@ at boot.
   the tyres use; density fades toward the rim so the disc edge is not a circle.
   Rebuilds only when the camera has moved 6 m (~3-12 ms), so cost is flat.
   Measured: ~150 instances on the coastal start, ~2 000 inland.
+- **Modelled props** (`src/render/worldMeshes.ts`) — trees are *grown*, not
+  stacked: a recursive limb solver emits tapered tubes along curved paths and
+  attaches foliage to the twigs (needle sprays on conifers, lumpy leaf clusters
+  on broadleaves), so silhouettes have gaps and layering instead of reading as a
+  cone. Palms get a ringed, bending trunk with leaved fronds; cacti are fluted
+  and spined; rocks are displaced icosahedra with a coarse facet term so they
+  fracture rather than blob. Buildings are assembled from parts — recessed
+  window openings with frames, muntins and sills, a cornice per storey, plinths,
+  corner quoins, a door with a striped awning, and either a pitched gable roof
+  with overhanging eaves, ridge cap and chimney or a flat roof with a parapet.
+  Two fidelity tiers per prop (`hi` within 420 m, `lo` beyond) share instance
+  transforms, so the detailed set costs 13.6 k triangles and the cheap set 2 k.
+- **Road furniture** — delineator posts down both shoulders and utility poles
+  with crossarms and insulators down paved roads are derived from the road graph
+  (uniform spacing, no double placement at chunk borders) rather than scattered.
 - **World dressing** — the horizon is closed by a coarse distant-landscape mesh
   plus procedural ridge systems beyond the playable square, roads carry painted
   lane markings that follow crests and camber, and props are multi-part
@@ -335,6 +350,11 @@ the README says so rather than pretending otherwise.
   are normal-mapped and AO'd, cars are lofted procedural bodies, and the sky,
   clouds and shadows are real-time only. Populated foliage thins out with
   distance and the LOD swap is visible if you stop and stare at a treeline.
+* **Lighting is a compromise.** The sun dominates and the sky fill is deliberately
+  low (`environmentIntensity` 0.1, hemisphere 0.15 at noon) because the ambient
+  had to stay under the tone-mapping exposure or every surface washed out. Red
+  paint still reads pink in direct sun; a proper exposure/white-balance pass per
+  weather is unfinished.
 * **Ground cover is a disc, not a texture.** Grass exists within ~76 m of the
   camera and thins out at the rim; on the coastal start there is little of it
   because the shelf is water, sand and tarmac.

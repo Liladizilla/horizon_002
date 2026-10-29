@@ -111,6 +111,8 @@ export class Game {
   private rewinding = false;
   private rewindHold = 0;
   private debugPhysics = false;
+  /** When set, the camera rig leaves the camera alone (screenshot probes). */
+  private cameraFrozen = false;
   private hudVisible = true;
   private photoMode = false;
   private suppressPause = false;
@@ -779,6 +781,7 @@ export class Game {
   private updatePresentation(dt: number, alpha: number) {
     const info = this.world.roadInfoAt(this.player.position.x, this.player.position.z);
     const roughness = info.roadId ? 0.15 : 0.75;
+    if (this.cameraFrozen) return;
     this.camera.update(dt, {
       position: this.player.position,
       quaternion: this.player.quaternion,
@@ -1058,6 +1061,36 @@ export class Game {
       counts[key] = (counts[key] ?? 0) + mesh.count;
     });
     return counts;
+  }
+
+  /** Live lighting override for visual tuning (probes only, not saved). */
+  debugLight(o: { hemi?: number; env?: number; exposure?: number; sun?: number }) {
+    const r = this.renderer;
+    if (o.hemi !== undefined) r.hemi.intensity = o.hemi;
+    if (o.env !== undefined) r.scene.environmentIntensity = o.env;
+    if (o.exposure !== undefined) r.renderer.toneMappingExposure = o.exposure;
+    if (o.sun !== undefined) r.sun.intensity = o.sun;
+    return { hemi: r.hemi.intensity, env: r.scene.environmentIntensity, exposure: r.renderer.toneMappingExposure, sun: r.sun.intensity };
+  }
+
+  /** Nearest prop of a given type in the loaded ring (for visual probes). */
+  debugNearestProp(type: string) {
+    let best: { x: number; y: number; z: number; d: number } | null = null;
+    const p = this.player.position;
+    this.world.eachProp((prop) => {
+      if (prop.type !== type) return;
+      const d = Math.hypot(prop.x - p.x, prop.z - p.z);
+      if (!best || d < best.d) best = { x: prop.x, y: prop.y, z: prop.z, d };
+    });
+    return best;
+  }
+
+  /** Park the camera at an explicit pose for screenshots (photo-mode style). */
+  debugCamera(px: number, py: number, pz: number, tx: number, ty: number, tz: number) {
+    this.renderer.camera.position.set(px, py, pz);
+    this.renderer.camera.lookAt(tx, ty, tz);
+    this.renderer.camera.updateMatrixWorld();
+    this.cameraFrozen = true;
   }
 
   /** Ground-cover telemetry (instance count + rebuild time). */

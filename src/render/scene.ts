@@ -59,9 +59,12 @@ const GradeShader = {
       // Filmic S-curve: deepen the shadows a touch and roll the highlights off
       // instead of clipping them, which is what makes flat renders read as CG.
       col = clamp(col, 0.0, 4.0);
-      col = col * col * (3.0 - 2.0 * col) * 0.35 + col * 0.65;
+      // Contrast around a mid-grey pivot rather than a raw smoothstep, which was
+      // lifting everything toward white and flattening the whole frame.
+      col = clamp((col - 0.18) * 1.16 + 0.18, 0.0, 4.0);
+      col = col * col * (3.0 - 2.0 * col) * 0.22 + col * 0.78;
       float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
-      col = mix(vec3(l), col, saturation);
+      col = mix(vec3(l), col, saturation * 1.12);
       // Split tone: cool the shadows, warm the highlights.
       col += vec3(-0.012, -0.004, 0.016) * (1.0 - smoothstep(0.0, 0.35, l));
       col += vec3(0.018, 0.010, -0.012) * smoothstep(0.55, 1.0, l);
@@ -359,16 +362,23 @@ export class Renderer {
     this.sunFar.target.position.copy(cameraPos);
     this.sunFar.intensity = this.sun.intensity * 0.55;
     this.sunFar.color.copy(this.sun.color);
-    this.sun.intensity = smoothstep(-6, 12, elevation) * 2.6 * (env.weather === 'clear' ? 1 : 0.6);
+    this.sun.intensity = smoothstep(-6, 12, elevation) * 2.7 * (env.weather === 'clear' ? 1 : 0.55);
     this.sun.color.setHSL(lerp(0.08, 0.13, smoothstep(0, 25, elevation)), lerp(0.65, 0.25, smoothstep(0, 25, elevation)), lerp(0.62, 0.95, smoothstep(0, 25, elevation)));
-    this.hemi.intensity = lerp(0.09, 0.22, nightFactor) * (env.weather === 'clear' ? 1 : 0.85);
-    this.ambient.intensity = lerp(0.02, 0.05, nightFactor);
+    // Sky fill. A physically motivated outdoor scene gets a large fraction of
+    // its light from the sky dome, not from the sun alone: with these near zero
+    // every shadowed wall, tree and car side rendered as a black cut-out.
+    const overcast = env.weather === 'clear' ? 1 : env.weather === 'overcast' ? 1.05 : 0.95;
+    this.hemi.intensity = lerp(0.1, 0.15, nightFactor) * overcast;
+    // Hemisphere colours follow the sky: cool from above, warm bounce below.
+    this.hemi.color.setHex(isNight ? 0x1b2433 : 0xbdd3ea);
+    this.hemi.groundColor.setHex(isNight ? 0x0a0d12 : 0x6b5a44);
+    this.ambient.intensity = lerp(0.04, 0.12, nightFactor);
 
     // Weather-driven fog and exposure
     const fog = this.scene.fog as THREE.FogExp2;
-    const baseFog = 0.00016;
+    const baseFog = 0.00007;
     let density = baseFog;
-    let fogColor = new THREE.Color(0x94b0c8);
+    let fogColor = new THREE.Color(0xa6c0d8);
     switch (env.weather) {
       case 'fog': density = 0.0022; fogColor.setHex(0xb9c6cc); break;
       case 'rain': density = 0.00075; fogColor.setHex(0x8d9aa6); break;
@@ -382,7 +392,7 @@ export class Renderer {
     fog.density = lerp(fog.density, density, 0.06);
     fog.color.lerp(fogColor, 0.06);
     this.sky.material.uniforms.mieCoefficient.value = isNight ? 0.003 : env.weather === 'clear' ? 0.005 : 0.02;
-    this.renderer.toneMappingExposure = lerp(0.9, 0.55, smoothstep(4, -6, elevation)) * (env.weather === 'storm' ? 0.85 : 1);
+    this.renderer.toneMappingExposure = lerp(0.95, 0.55, smoothstep(4, -6, elevation)) * (env.weather === 'storm' ? 0.85 : 1);
 
     // Refresh the environment map a few times a second so reflections track the sky.
     this.envTime += 1;
@@ -392,7 +402,9 @@ export class Renderer {
       this.envRT = rt;
       this.scene.environment = rt.texture;
     }
-    this.scene.environmentIntensity = isNight ? 0.08 : 0.09;
+    // Image-based lighting from the same sky the player sees: this is what
+    // gives metals, paint and wet roads their reflections.
+    this.scene.environmentIntensity = isNight ? 0.08 : 0.1;
 
     // Shadow camera follows the player, snapped to reduce shimmering.
     const snap = 2;

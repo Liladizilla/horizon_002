@@ -5,7 +5,7 @@ import type { SurfaceId } from '../core/types';
 import { baseHeight, biomeWeights, biomeColor, distantRidge, WORLD_SIZE, SEA_LEVEL } from './terrain';
 import { buildRoadNetwork, RoadGraph, type RoadField, type RoadInstance } from './roads';
 import { generateChunkProps, CHUNK_SIZE, type PropInstance, type PropType } from './props';
-import { buildPropGeometries, propMaterial, BUILDING_TINTS } from '../render/worldMeshes';
+import { buildPropGeometries, propMaterial, BUILDING_TINTS, type PropGeometryPair } from '../render/worldMeshes';
 import { GroundCover, type CoverPlacement } from '../render/groundCover';
 import type { MaterialSet } from '../render/materials';
 import { mulberry32, hash2 } from '../core/rng';
@@ -18,6 +18,9 @@ const PHYS_RES = 4;             // Rapier heightfield cell size
 const PHYS_SUBDIV = CHUNK_SIZE / PHYS_RES; // 128
 
 const VIEW_RADIUS = 1150;       // chunks with visuals
+// Chunk-granular LOD: a chunk centre can be ~360 m from the camera while a
+// building in it is 15 m away, so this is generous on purpose.
+const PROP_DETAIL_RADIUS = 420;
 const ROAD_LIFT = 0.09;         // road mesh sits this far above the height field
 // UV scale for road ribbons. The asphalt texture is square and covers ~3.5 m
 // of road, so a 7 m carriageway tiles it twice across and every 3.5 m along.
@@ -61,7 +64,7 @@ export class GameWorld {
   private quality: WorldQuality;
 
   readonly chunks = new Map<string, Chunk>();
-  private propGeometries: Record<PropType, THREE.BufferGeometry>;
+  private propGeometries: Record<PropType, PropGeometryPair>;
   private roadMeshes: THREE.Mesh[] = [];
   private farTerrain: THREE.Mesh | null = null;
   private groundCover: GroundCover | null = null;
@@ -398,6 +401,7 @@ export class GameWorld {
   private updateChunkLod(chunk: Chunk, dist: number) {
     const wantRes = dist < 620 ? this.quality.terrainRes : this.quality.terrainResFar;
     if (wantRes !== chunk.visRes) this.buildChunkMesh(chunk, wantRes);
+    this.setPropLod(chunk, dist < PROP_DETAIL_RADIUS);
     const wantPhysics = dist < PHYSICS_RADIUS;
     if (wantPhysics && !chunk.body) this.buildChunkCollider(chunk);
     else if (!wantPhysics && chunk.body) { this.rapier.removeRigidBody(chunk.body); chunk.body = null; }
@@ -631,6 +635,10 @@ export class GameWorld {
       (x, z) => this.roadInfoAt(x, z),
       this.quality.foliageDensity,
     );
+    // Roadside furniture is derived from the road graph rather than scattered:
+    // delineator posts down both shoulders and utility poles down one side.
+    // These are the cues that make a strip of tarmac read as a maintained road.
+    this.addRoadFurniture(chunk, data.instances);
     chunk.instanceList = data.instances;
     chunk.propsLoaded = true;
 
@@ -644,35 +652,99 @@ export class GameWorld {
     const rnd = mulberry32(Math.floor(hash2(chunk.cx, chunk.cz, 7717) * 4294967295));
 
     for (const [type, list] of byType) {
-      const geo = this.propGeometries[type];
-      if (!geo) continue;
+      const pair = this.propGeometries[type];
+      if (!pair) continue;
       const matKey = propMaterial(type);
       const material = matKey === 'rock' ? this.materials.rock : matKey === 'building' ? this.materials.building : this.materials.foliage;
-      const mesh = new THREE.InstancedMesh(geo, material, list.length);
-      mesh.userData.propType = type; // diagnostics: prop coverage counts
-      mesh.castShadow = this.quality.shadows && type !== 'bush';
-      mesh.receiveShadow = false;
-      mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
-      for (let i = 0; i < list.length; i++) {
-        const p = list[i];
-        dummy.position.set(p.x, p.y, p.z);
-        dummy.rotation.set(p.tilt ?? 0, p.rotation, (p.tilt ?? 0) * 0.5);
-        const s = p.scale;
-        if (type === 'building') dummy.scale.set(s, s * (1 + (p.scale % 0.7)), s);
-        else dummy.scale.set(s, s, s);
-        dummy.updateMatrix();
-        mesh.setMatrixAt(i, dummy.matrix);
-        if (type === 'building' || type === 'barn') {
-          color.setHex(BUILDING_TINTS[Math.floor(rnd() * BUILDING_TINTS.length)]);
-          mesh.setColorAt(i, color);
+
+      // Two fidelity tiers sharing the same instance transforms: detailed
+      // geometry for chunks near the player, cheap silhouettes for the rest of
+      // the streamed ring. Only one is visible at a time (see setPropLod).
+      for (const [tier, geo] of [['hi', pair.hi], ['lo', pair.lo]] as const) {
+        const mesh = new THREE.InstancedMesh(geo, material, list.length);
+        mesh.userData.propType = type; // diagnostics: prop coverage counts
+        mesh.userData.tier = tier;
+        mesh.castShadow = this.quality.shadows && type !== 'bush' && tier === 'hi';
+        mesh.receiveShadow = false;
+        mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+        for (let i = 0; i < list.length; i++) {
+          const p = list[i];
+          dummy.position.set(p.x, p.y, p.z);
+          dummy.rotation.set(p.tilt ?? 0, p.rotation, (p.tilt ?? 0) * 0.5);
+          const s = p.scale;
+          if (type === 'building') dummy.scale.set(s, s * (1 + (p.scale % 0.7)), s);
+          else dummy.scale.set(s, s, s);
+          dummy.updateMatrix();
+          mesh.setMatrixAt(i, dummy.matrix);
+          if (type === 'building' || type === 'barn') {
+            color.setHex(BUILDING_TINTS[Math.floor(rnd() * BUILDING_TINTS.length)]);
+            mesh.setColorAt(i, color);
+          }
+        }
+        mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        mesh.frustumCulled = true;
+        mesh.visible = false;
+        mesh.computeBoundingSphere();
+        chunk.meshGroup.add(mesh);
+        chunk.propMeshes.push(mesh);
+      }
+    }
+  }
+
+  /**
+   * Places delineator posts and utility poles along every road sample that
+   * falls inside this chunk. Deterministic: it walks the road samples, so the
+   * spacing is uniform, and it only emits props whose position is inside the
+   * chunk, so neighbouring chunks never double up.
+   */
+  private addRoadFurniture(chunk: Chunk, out: PropInstance[]) {
+    const minX = chunk.cx * CHUNK_SIZE;
+    const minZ = chunk.cz * CHUNK_SIZE;
+    const WIRES = 3;
+    for (const inst of this.field.instances) {
+      const halfW = inst.def.width / 2;
+      const isPaved = inst.def.surface === 'asphaltDry';
+      for (let i = 0; i < inst.samples.length; i += 4) {
+        const s = inst.samples[i];
+        if (s.x < minX || s.x >= minX + CHUNK_SIZE || s.z < minZ || s.z >= minZ + CHUNK_SIZE) continue;
+        const nx = -s.dz, nz = s.dx;
+        // Posts 1.6 m off the shoulder, both sides.
+        for (const side of [-1, 1]) {
+          const px = s.x + nx * (halfW + 1.6) * side;
+          const pz = s.z + nz * (halfW + 1.6) * side;
+          if (this.onRoad(px, pz, 0.4)) continue;
+          out.push({
+            x: px,
+            y: this.heightAt(px, pz),
+            z: pz,
+            scale: 1,
+            rotation: Math.atan2(s.dx, s.dz),
+            type: 'delineator',
+          });
+        }
+        // Utility poles every ~40 m, alternating sides, only on paved roads.
+        if (isPaved && i % 8 === 0) {
+          const side = (Math.floor(i / 8) % 2 === 0) ? 1 : -1;
+          const px = s.x + nx * (halfW + 3.4) * side;
+          const pz = s.z + nz * (halfW + 3.4) * side;
+          if (this.onRoad(px, pz, 0.6)) continue;
+          const y = this.heightAt(px, pz);
+          out.push({
+            x: px, y, z: pz, scale: 1,
+            rotation: Math.atan2(s.dx, s.dz),
+            type: 'pole',
+          });
+          void WIRES;
         }
       }
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-      mesh.frustumCulled = true;
-      mesh.computeBoundingSphere();
-      chunk.propMeshes.push(mesh);
-      chunk.meshGroup.add(mesh);
+    }
+  }
+
+  /** Swaps prop geometry tiers for a chunk (near = detailed). */
+  private setPropLod(chunk: Chunk, near: boolean) {
+    for (const mesh of chunk.propMeshes) {
+      mesh.visible = mesh.userData.tier === (near ? 'hi' : 'lo');
     }
   }
 
@@ -682,8 +754,8 @@ export class GameWorld {
     // Wet asphalt looks darker and shinier.
     const t = clamp(w, 0, 1);
     this.materials.asphalt.color.setRGB(1 - t * 0.45, 1 - t * 0.45, 1 - t * 0.42);
-    this.materials.asphalt.roughness = lerp(0.72, 0.16, t);
-    this.materials.asphalt.metalness = lerp(0.02, 0.28, t);
+    this.materials.asphalt.roughness = lerp(0.62, 0.34, t);
+    this.materials.asphalt.metalness = lerp(0.02, 0.12, t);
     this.materials.terrain.color.setRGB(1 - t * 0.12, 1 - t * 0.12, 1 - t * 0.12);
   }
 
@@ -695,6 +767,13 @@ export class GameWorld {
       return { x: s.x, y: this.driveY(s.x, s.z) + 0.5, z: s.z, yaw: Math.atan2(s.dx, s.dz) };
     }
     return { x, y: this.driveY(x, z) + 0.5, z, yaw: 0 };
+  }
+
+  /** Iterates every prop instance in the loaded ring. */
+  eachProp(fn: (p: PropInstance) => void) {
+    for (const chunk of this.chunks.values()) {
+      for (const inst of chunk.instanceList) fn(inst);
+    }
   }
 
   /** Ground-cover telemetry: instance count and rebuild cost. */

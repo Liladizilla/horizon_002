@@ -183,10 +183,12 @@ export class GroundCover {
         const tint = place.tintAt(x, z);
         // Brighten and slightly desaturate relative to the ground so the blades
         // read as new growth rather than decals.
+        // Slightly lighter than the ground so blades catch the sun, but nowhere
+        // near the blown-out stalks a bigger multiplier produced.
         color.setRGB(
-          Math.min(1, tint[0] * 5.5 + 0.05),
-          Math.min(1, tint[1] * 5.0 + 0.06),
-          Math.min(1, tint[2] * 5.5 + 0.03),
+          Math.min(1, tint[0] * 0.55 + 0.05),
+          Math.min(1, tint[1] * 0.6 + 0.06),
+          Math.min(1, tint[2] * 0.5 + 0.03),
         );
         this.mesh.setColorAt(n, color);
         n++;

@@ -21,6 +21,18 @@ logos or map data. See [NOTICE.md](NOTICE.md) for third-party licences.
 
 ---
 
+## Screenshots
+
+Captured from the running build (headless SwiftShader, so quality settings are
+turned down — it looks better on real hardware).
+
+| | |
+| --- | --- |
+| ![Coastal causeway](docs/screenshots/causeway.jpg) | ![Roadside furniture](docs/screenshots/road-poles.jpg) |
+| ![Town building](docs/screenshots/town-building.jpg) | ![Conifer](docs/screenshots/conifer.jpg) |
+
+---
+
 ## Quick start
 
 ```bash
